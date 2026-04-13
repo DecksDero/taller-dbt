@@ -263,12 +263,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
             <div class="fuel-seg" id="fuel-4" onclick="setFuel(4)">4/4</div>
           </div>
         </div>
-        <div class="field"><label>Taller</label>
-          <select id="f-taller" onchange="autoSaveForm()">
-            <option value="">Seleccionar...</option>
-            <option>RILDO</option><option>PINTURA</option><option>TERMINO</option><option>NA</option>
-          </select>
-        </div>
+
       </div>
 
       <!-- PASO 1: Estado ingreso -->
@@ -553,7 +548,6 @@ window.iniciarNuevoIngreso = function(){
   document.getElementById('f-modelo').innerHTML='<option value="">Seleccionar marca primero</option>';
   document.getElementById('f-otro-row').style.display='none';
   document.getElementById('f-km').value='';
-  document.getElementById('f-taller').value='';
   document.getElementById('f-obs').value='';
   for(let i=1;i<=4;i++) document.getElementById('fuel-'+i).classList.remove('on');
   ['OK','Trizado','Picado'].forEach(v=>document.getElementById('pb-'+v).className='tog-opt');
@@ -589,7 +583,6 @@ window.abrirChecklist = function(){
   if(v.marca){ document.getElementById('f-marca').value=v.marca; updateModelos(); }
   if(v.modelo) document.getElementById('f-modelo').value=v.modelo;
   document.getElementById('f-km').value=v.km||'';
-  document.getElementById('f-taller').value=v.taller||'';
   document.getElementById('f-obs').value=v.observaciones||'';
   setFuel(fst.combustible);
   if(fst.parabrisas) setPB(fst.parabrisas);
@@ -746,10 +739,9 @@ function buildData(){
   const modeloFinal=modeloVal==='Otro'?(document.getElementById('f-otro-modelo')?.value||'Otro'):modeloVal;
   const anio=document.getElementById('f-anio').value;
   const km=document.getElementById('f-km').value;
-  const taller=document.getElementById('f-taller').value;
   return {
     patente, marca, modelo:modeloFinal, anio:anio?parseInt(anio):null, km:km?parseInt(km):null,
-    taller, combustible:fst.combustible, parabrisas:fst.parabrisas, tapiz:fst.tapiz,
+    combustible:fst.combustible, parabrisas:fst.parabrisas, tapiz:fst.tapiz,
     accesorios:fst.accesorios, accesoriosQty:fst.accesoriosQty,
     zonasActivas:[...fst.zonasActivas],
     danosZona:Object.fromEntries(Object.entries(fst.danosZona).map(([k,v])=>[k,{repSugeridos:[...v.repSugeridos]}])),
@@ -797,7 +789,7 @@ function renderFormSummary(){
       <div class="sum-row"><span>Combustible</span><span>${data.combustible?data.combustible+'/4':'—'}</span></div>
       <div class="sum-row"><span>Parabrisas</span><span>${data.parabrisas||'—'}</span></div>
       <div class="sum-row"><span>Tapiz</span><span>${data.tapiz||'—'}</span></div>
-      <div class="sum-row"><span>Taller</span><span>${data.taller||'—'}</span></div>
+
     </div>
     <div class="summary-card">
       <div class="sum-title">Accesorios</div>
