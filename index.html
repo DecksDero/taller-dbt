@@ -69,8 +69,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
 .veh-info{font-size:13px;color:var(--text2);margin-bottom:6px}
 .veh-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pill{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.3px}
-.pill-borrador{background:var(--bg3);color:var(--text3);border:0.5px solid var(--border2)}
-.pill-new{background:var(--blue-dim);color:var(--blue)}
+.pill-new{background:var(--amber-dim);color:var(--amber)}
+.pill-datos{background:var(--blue-dim);color:var(--blue)}
 .pill-datos{background:var(--amber-dim);color:var(--amber)}
 .pill-presup{background:rgba(255,171,0,0.2);color:var(--amber)}
 .pill-enviado{background:rgba(138,43,226,0.15);color:#bf7fff}
@@ -184,11 +184,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
     <div style="display:flex;align-items:center;gap:10px">
       <img src="logo.png" style="width:36px;height:36px;border-radius:8px;object-fit:cover" alt="DBT">
       <div>
-        <div class="nav-title">Taller DBT</div>
-        <div class="nav-sub" id="nav-sub">Cargando...</div>
+        <div class="nav-title">Presupuestos</div>
+        <div class="nav-sub" id="nav-sub">Sincronizando...</div>
       </div>
     </div>
-    <button class="nav-btn" onclick="iniciarNuevoIngreso()">+ Nuevo</button>
   </div>
 
   <!-- PANEL -->
@@ -245,15 +244,16 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
         <div class="field"><label>Marca</label>
           <select id="f-marca" onchange="updateModelos();autoSaveForm()">
             <option value="">Seleccionar...</option>
-            <option>Citroën</option><option>Peugeot</option><option>Volkswagen</option>
-            <option>Toyota</option><option>Nissan</option><option>Hyundai</option>
-            <option>Kia</option><option>Chevrolet</option><option>Ford</option>
-            <option>Mitsubishi</option><option>Otra</option>
+            <option>Citroën</option><option>Peugeot</option><option>Renault</option>
+            <option>Volkswagen</option><option>Toyota</option><option>Nissan</option>
+            <option>Hyundai</option><option>Kia</option><option>Chevrolet</option>
+            <option>Ford</option><option>Mitsubishi</option><option>Otra</option>
           </select>
         </div>
         <div class="field"><label>Modelo</label>
           <select id="f-modelo" onchange="checkOtroModelo();autoSaveForm()"><option value="">Seleccionar marca primero</option></select>
         </div>
+        <div class="field" id="f-otra-marca-row" style="display:none"><label>Especificar marca</label><input id="f-otra-marca" placeholder="Ej: Suzuki, Isuzu..." oninput="autoSaveForm()"></div>
         <div class="field" id="f-otro-row" style="display:none"><label>Especificar modelo</label><input id="f-otro-modelo" placeholder="Escribe el modelo..." oninput="autoSaveForm()"></div>
         <div class="field"><label>Kilometraje</label><input id="f-km" type="number" placeholder="85000" oninput="autoSaveForm()"></div>
         <div class="field"><label>Combustible</label>
@@ -284,15 +284,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
         </div>
       </div>
 
-      <!-- PASO 2: Zonas -->
-      <div class="step-form" id="sf-2">
-        <div class="section-label">Zonas con daño</div>
-        <div class="zona-grid" id="zona-grid"></div>
-        <div id="zona-details"></div>
-      </div>
+
 
       <!-- PASO 3: Trabajos y repuestos -->
-      <div class="step-form" id="sf-3">
+      <div class="step-form" id="sf-2">
         <div class="section-label">Trabajos de reparación</div>
         <div class="tags-wrap" id="trabajos-tags"></div>
         <div class="add-row">
@@ -309,7 +304,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
         <textarea id="f-obs" placeholder="Notas del siniestro..." oninput="autoSaveForm()" style="width:100%;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;padding:11px 14px;font-family:'DM Sans',sans-serif;outline:none;resize:none;height:80px;line-height:1.5"></textarea>
       </div>
 
-
+      <!-- PASO 4: Resumen -->
+      <div class="step-form" id="sf-4">
+        <div class="section-label">Resumen</div>
+        <div id="form-summary"></div>
+      </div>
 
     </div>
     <div class="nav-btns" id="form-nav-btns">
@@ -373,19 +372,21 @@ async function syncToSupabase(patente, estado) {
   const {data} = await sb.from('vehiculos').select('id').eq('patente', pat).maybeSingle();
   if(!data) return;
   let obs = null;
-  if(estado === 'Datos tomados') obs = 'Con datos';
-  if(estado === 'Presupuesto en curso') obs = 'Con datos';
-  if(estado === 'Enviado') obs = 'Presupuesto Enviado';
-  if(obs) {
-    await sb.from('vehiculos').update({obs}).eq('patente', pat);
-  }
+  if(estado === 'Con datos') obs = 'Con datos';
+  if(estado === 'Presupuesto terminado') obs = 'Presupuesto terminado';
+  if(estado === 'Presupuesto enviado') obs = 'Presupuesto Enviado';
+  if(obs) await sb.from('vehiculos').update({obs}).eq('patente', pat);
 }
 
-const ESTADOS = ['Borrador','Ingresado','Datos tomados','Presupuesto en curso','Enviado','En reparación','Listo','Entregado'];
+const ESTADOS = ['Pendiente de datos','Con datos','Presupuesto terminado','Presupuesto enviado','En reparación','Listo','Entregado'];
 const ESTADO_PILLS = {
-  'Borrador':'pill-borrador','Ingresado':'pill-new','Datos tomados':'pill-datos',
-  'Presupuesto en curso':'pill-presup','Enviado':'pill-enviado',
-  'En reparación':'pill-reparando','Listo':'pill-listo','Entregado':'pill-entregado'
+  'Pendiente de datos':'pill-new',
+  'Con datos':'pill-datos',
+  'Presupuesto terminado':'pill-presup',
+  'Presupuesto enviado':'pill-enviado',
+  'En reparación':'pill-reparando',
+  'Listo':'pill-listo',
+  'Entregado':'pill-entregado'
 };
 const ACCESORIOS = [
   {key:'Documentos',tipo:'check'},{key:'Kit',tipo:'check'},{key:'TAG',tipo:'check'},
@@ -405,6 +406,7 @@ const REP_POR_ZONA = {
 const MODELOS = {
   'Citroën':['Berlingo','C3','C4','Jumpy','Dispatch','Otro'],
   'Peugeot':['Partner','Expert','308','208','Boxer','Otro'],
+  'Renault':['Kangoo','Duster','Logan','Sandero','Master','Otro'],
   'Volkswagen':['Amarok','Transporter','Polo','Golf','Crafter','Otro'],
   'Toyota':['Hilux','Land Cruiser','Corolla','RAV4','Hiace','Otro'],
   'Nissan':['NP300','Frontier','Qashqai','X-Trail','Urvan','Otro'],
@@ -419,7 +421,7 @@ const MODELOS = {
 let vehiculos = {};
 let currentVehId = null;
 let formStep = 0;
-const FORM_STEPS = 4;
+const FORM_STEPS = 3;
 let fst = resetFst();
 
 function resetFst(){
@@ -432,10 +434,33 @@ onSnapshot(col, snap => {
   snap.forEach(d => vehiculos[d.id] = {...d.data(), id:d.id});
   renderPanel();
   renderStats();
-  const total = Object.keys(vehiculos).length;
   const activos = Object.values(vehiculos).filter(v=>v.estado!=='Entregado').length;
+  const total = Object.keys(vehiculos).length;
   document.getElementById('nav-sub').textContent = `${activos} activos · ${total} total`;
 });
+
+// Sync new vehicles from Supabase (control app) to Firebase (presupuestos)
+async function syncNuevosDeSuapabase(){
+  const {data} = await sb.from('vehiculos').select('patente,taller,ingreso').is('salida',null).order('id',{ascending:false}).limit(50);
+  if(!data) return;
+  for(const v of data){
+    const pat = v.patente.toUpperCase().trim();
+    // Check if already in Firebase
+    const exists = Object.values(vehiculos).find(fv => (fv.patente||'').toUpperCase()===pat);
+    if(!exists){
+      // New vehicle from control → add to Firebase as "Pendiente de datos"
+      const newId = pat.replace(/[^A-Z0-9]/g,'')+'_ctrl';
+      await setDoc(doc(db,'vehiculos',newId),{
+        patente:pat, taller:v.taller||'', estado:'Pendiente de datos',
+        fechaIngreso:serverTimestamp(), updatedAt:serverTimestamp()
+      });
+    }
+  }
+}
+
+// Run sync on load and every 2 minutes
+syncNuevosDeSuapabase();
+setInterval(syncNuevosDeSuapabase, 120000);
 
 function renderPanel(){
   const el = document.getElementById('panel-list');
@@ -516,7 +541,7 @@ window.abrirDetalle = function(id){
 
   // Botones
   const tieneChecklist = !!(v.trabajos||v.repuestos||v.parabrisas);
-  document.getElementById('btn-ir-checklist').textContent = tieneChecklist ? 'Editar checklist' : 'Completar checklist';
+  document.getElementById('btn-ir-checklist').textContent = tieneChecklist ? 'Editar checklist' : 'Tomar datos';
   document.getElementById('btn-excel').style.display = tieneChecklist ? 'block' : 'none';
 
   showScreen('detail');
@@ -528,6 +553,7 @@ window.cambiarEstado = function(estado){
   updateDoc(doc(db,'vehiculos',currentVehId),{estado,...extra,updatedAt:serverTimestamp()});
   const v = vehiculos[currentVehId];
   if(v?.patente) syncToSupabase(v.patente, estado);
+  toast('Estado: '+estado);
   const sr=document.getElementById('status-row');
   sr.querySelectorAll('.status-btn').forEach(b=>b.classList.toggle('active',b.textContent===estado));
   toast('Estado actualizado');
@@ -535,37 +561,7 @@ window.cambiarEstado = function(estado){
 
 window.volverPanel = function(){ showScreen('panel'); }
 
-window.iniciarNuevoIngreso = async function(){
-  fst = resetFst();
-  formStep = 0;
-  // Create Firebase doc immediately so it persists on reload
-  const tempId = 'borrador_'+Date.now();
-  currentVehId = tempId;
-  await setDoc(doc(db,'vehiculos',tempId),{
-    patente:'',estado:'Borrador',
-    fechaIngreso:serverTimestamp(),updatedAt:serverTimestamp()
-  });
-  document.getElementById('f-patente').value='';
-  document.getElementById('f-anio').value='';
-  document.getElementById('f-marca').value='';
-  document.getElementById('f-modelo').innerHTML='<option value="">Seleccionar marca primero</option>';
-  document.getElementById('f-otro-row').style.display='none';
-  document.getElementById('f-km').value='';
-  document.getElementById('f-obs').value='';
-  for(let i=1;i<=4;i++) document.getElementById('fuel-'+i).classList.remove('on');
-  ['OK','Trizado','Picado'].forEach(v=>document.getElementById('pb-'+v).className='tog-opt');
-  ['OK','Sucio'].forEach(v=>document.getElementById('tapiz-'+v).className='tog-opt');
-  document.getElementById('form-nav-title').textContent='Nuevo ingreso';
-  document.getElementById('form-nav-sub').textContent='';
-  renderAccGrid();renderZonaGrid();renderWorking();renderReps();
-  goFormStep(0);
-  document.getElementById('main-tabbar').style.display='none';
-  document.getElementById('main-nav').style.display='none';
-  document.getElementById('screen-form').classList.add('active');
-  document.getElementById('screen-panel').classList.remove('active');
-  document.getElementById('screen-stats').classList.remove('active');
-  document.getElementById('screen-detail').classList.remove('active');
-}
+window.iniciarNuevoIngreso = function(){ showScreen('panel'); }
 
 window.abrirChecklist = function(){
   const v = vehiculos[currentVehId];
@@ -581,18 +577,22 @@ window.abrirChecklist = function(){
     accesorios: v.accesorios||{},
     accesoriosQty: v.accesoriosQty||{}
   };
-  document.getElementById('f-patente').value=v.patente||'';
-  document.getElementById('f-anio').value=v.anio||'';
-  if(v.marca){ document.getElementById('f-marca').value=v.marca; updateModelos(); }
-  if(v.modelo) document.getElementById('f-modelo').value=v.modelo;
-  document.getElementById('f-km').value=v.km||'';
-  document.getElementById('f-obs').value=v.observaciones||'';
+  // Pre-fill form fields
+  document.getElementById('f-patente').value = v.patente||'';
+  document.getElementById('f-anio').value = v.anio||'';
+  document.getElementById('f-km').value = v.km||'';
+  document.getElementById('f-obs').value = v.observaciones||'';
+  if(v.marca){
+    document.getElementById('f-marca').value = v.marca;
+    updateModelos();
+  }
+  if(v.modelo) document.getElementById('f-modelo').value = v.modelo;
   setFuel(fst.combustible);
   if(fst.parabrisas) setPB(fst.parabrisas);
   if(fst.tapiz) setTapiz(fst.tapiz);
-  renderAccGrid();renderZonaGrid();renderWorking();renderReps();
-  document.getElementById('form-nav-title').textContent=(v.patente||'').toUpperCase();
-  document.getElementById('form-nav-sub').textContent='Editando checklist';
+  renderAccGrid(); renderWorking(); renderReps();
+  document.getElementById('form-nav-title').textContent = (v.patente||'').toUpperCase();
+  document.getElementById('form-nav-sub').textContent = v.estado||'';
   goFormStep(0);
   document.getElementById('main-tabbar').style.display='none';
   document.getElementById('main-nav').style.display='none';
@@ -604,8 +604,12 @@ window.volverDesdeForm = function(){
   document.getElementById('main-tabbar').style.display='flex';
   document.getElementById('main-nav').style.display='flex';
   document.getElementById('screen-form').classList.remove('active');
-  if(currentVehId){ showScreen('detail'); abrirDetalle(currentVehId); }
-  else showScreen('panel');
+  if(currentVehId && vehiculos[currentVehId]){
+    showScreen('detail');
+    abrirDetalle(currentVehId);
+  } else {
+    showScreen('panel');
+  }
 }
 
 function showScreen(name){
@@ -627,7 +631,14 @@ window.switchTab = function(tab){
 window.updateModelos = function(){
   const marca = document.getElementById('f-marca').value;
   const sel = document.getElementById('f-modelo'); sel.innerHTML='';
-  if(!marca){sel.innerHTML='<option value="">Seleccionar marca primero</option>';document.getElementById('f-otro-row').style.display='none';return;}
+  const otraMarcaRow = document.getElementById('f-otra-marca-row');
+  if(!marca){
+    sel.innerHTML='<option value="">Seleccionar marca primero</option>';
+    document.getElementById('f-otro-row').style.display='none';
+    if(otraMarcaRow) otraMarcaRow.style.display='none';
+    return;
+  }
+  if(otraMarcaRow) otraMarcaRow.style.display = marca==='Otra' ? 'flex' : 'none';
   (MODELOS[marca]||['Otro']).forEach(m=>{const o=document.createElement('option');o.value=m;o.textContent=m;sel.appendChild(o);});
   checkOtroModelo();
 }
@@ -731,9 +742,7 @@ function buildObs(){
   if(fst.tapiz==='Sucio')parts.push('Tapiz sucio.');
   const p=fst.accesoriosQty['Pisos']||0; if(p)parts.push('Pisos: '+p+'.');
   const pa=fst.accesoriosQty['Patentes']||0; if(pa)parts.push('Patentes: '+pa+'.');
-  const faltantes=ACCESORIOS
-    .filter(a=>a.tipo==='check' && !fst.accesorios[a.key])
-    .map(a=>a.key);
+  const faltantes=ACCESORIOS.filter(a=>a.tipo==='check'&&!fst.accesorios[a.key]).map(a=>a.key);
   if(faltantes.length) parts.push('Faltante: '+faltantes.join(', ')+'.');
   const obs=document.getElementById('f-obs')?.value||''; if(obs)parts.push(obs);
   return parts.join(' ');
@@ -741,7 +750,8 @@ function buildObs(){
 
 function buildData(){
   const patente=document.getElementById('f-patente').value.toUpperCase().trim();
-  const marca=document.getElementById('f-marca').value;
+  const marcaVal=document.getElementById('f-marca').value;
+  const marca=marcaVal==='Otra'?(document.getElementById('f-otra-marca')?.value||'Otra'):marcaVal;
   const modeloVal=document.getElementById('f-modelo').value;
   const modeloFinal=modeloVal==='Otro'?(document.getElementById('f-otro-modelo')?.value||'Otro'):modeloVal;
   const anio=document.getElementById('f-anio').value;
@@ -760,17 +770,14 @@ function buildData(){
 function autoSaveForm(){
   if(!currentVehId) return;
   const data=buildData();
-  const estado = data.patente
-    ? (fst.trabajos.length||fst.repuestos.length ? 'Presupuesto en curso' : 'Datos tomados')
-    : 'Borrador';
-  updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()}).catch(()=>{});
+  updateDoc(doc(db,'vehiculos',currentVehId),{...data,updatedAt:serverTimestamp()}).catch(()=>{});
 }
 
 async function guardarVehiculo(){
   const data=buildData();
   if(!data.patente){toast('Ingresa la patente');return false;}
   const id=data.patente.replace(/[^A-Z0-9]/g,'')+'_'+Date.now();
-  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto en curso' : 'Datos tomados';
+  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto terminado' : 'Con datos';
   await setDoc(doc(db,'vehiculos',id),{...data,estado,fechaIngreso:serverTimestamp(),updatedAt:serverTimestamp()});
   currentVehId=id;
   return true;
@@ -779,19 +786,9 @@ async function guardarVehiculo(){
 async function actualizarChecklist(){
   if(!currentVehId) return false;
   const data=buildData();
-  if(!data.patente){ toast('Ingresa la patente primero'); return false; }
-  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto en curso' : 'Datos tomados';
-  // If this was a borrador, rename the doc to use the patente as ID
-  const oldId = currentVehId;
-  const newId = data.patente.replace(/[^A-Z0-9]/g,'')+'_'+Date.now();
-  if(oldId.startsWith('borrador_')){
-    await setDoc(doc(db,'vehiculos',newId),{...data,estado,fechaIngreso:serverTimestamp(),updatedAt:serverTimestamp()});
-    await deleteDoc(doc(db,'vehiculos',oldId));
-    currentVehId = newId;
-  } else {
-    await updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()});
-  }
-  syncToSupabase(data.patente, estado);
+  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto terminado' : 'Con datos';
+  await updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()});
+  if(data.patente) syncToSupabase(data.patente, estado);
   return true;
 }
 
@@ -831,12 +828,12 @@ function goFormStep(n){
   // nav buttons
   document.getElementById('btn-prev').style.display=n===0?'none':'block';
   document.getElementById('btn-next').textContent = n===FORM_STEPS-1 ? 'Guardar ✓' : 'Siguiente →';
+
 }
 
 window.nextStep = async function(){
   if(formStep===FORM_STEPS-1){
-    // Last step: save
-    const ok = await actualizarChecklist();
+    const ok = currentVehId ? await actualizarChecklist() : await guardarVehiculo();
     if(ok){
       toast('Guardado correctamente');
       setTimeout(()=>{ volverDesdeForm(); if(currentVehId) abrirDetalle(currentVehId); },600);
@@ -878,14 +875,16 @@ window.generarExcel = async function(){
         observaciones:v.observaciones||''
       })
     });
-    if(!res.ok) throw new Error('Error '+res.status);
+    if(!res.ok) throw new Error('Error del servidor: '+res.status);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href=url; a.download=`Presupuesto_${(v.patente||'').toUpperCase()}.xlsx`;
+    a.href=url;
+    a.download=`Presupuesto_${(v.patente||'').toUpperCase()}.xlsx`;
     document.body.appendChild(a); a.click();
     document.body.removeChild(a); URL.revokeObjectURL(url);
     toast('Excel descargado');
+    cambiarEstado('Presupuesto enviado');
   }catch(e){ console.error(e); toast('Error: '+e.message); }
   if(btn){ btn.textContent='Descargar Excel'; btn.disabled=false; }
 }
