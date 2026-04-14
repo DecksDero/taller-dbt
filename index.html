@@ -69,6 +69,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
 .veh-info{font-size:13px;color:var(--text2);margin-bottom:6px}
 .veh-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pill{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.3px}
+.pill-borrador{background:var(--bg3);color:var(--text3);border:0.5px solid var(--border2)}
 .pill-new{background:var(--blue-dim);color:var(--blue)}
 .pill-datos{background:var(--amber-dim);color:var(--amber)}
 .pill-presup{background:rgba(255,171,0,0.2);color:var(--amber)}
@@ -308,11 +309,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
         <textarea id="f-obs" placeholder="Notas del siniestro..." oninput="autoSaveForm()" style="width:100%;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;padding:11px 14px;font-family:'DM Sans',sans-serif;outline:none;resize:none;height:80px;line-height:1.5"></textarea>
       </div>
 
-      <!-- PASO 4: Resumen -->
-      <div class="step-form" id="sf-4">
-        <div class="section-label">Resumen</div>
-        <div id="form-summary"></div>
-      </div>
+
 
     </div>
     <div class="nav-btns" id="form-nav-btns">
@@ -384,9 +381,9 @@ async function syncToSupabase(patente, estado) {
   }
 }
 
-const ESTADOS = ['Ingresado','Datos tomados','Presupuesto en curso','Enviado','En reparación','Listo','Entregado'];
+const ESTADOS = ['Borrador','Ingresado','Datos tomados','Presupuesto en curso','Enviado','En reparación','Listo','Entregado'];
 const ESTADO_PILLS = {
-  'Ingresado':'pill-new','Datos tomados':'pill-datos',
+  'Borrador':'pill-borrador','Ingresado':'pill-new','Datos tomados':'pill-datos',
   'Presupuesto en curso':'pill-presup','Enviado':'pill-enviado',
   'En reparación':'pill-reparando','Listo':'pill-listo','Entregado':'pill-entregado'
 };
@@ -422,7 +419,7 @@ const MODELOS = {
 let vehiculos = {};
 let currentVehId = null;
 let formStep = 0;
-const FORM_STEPS = 5;
+const FORM_STEPS = 4;
 let fst = resetFst();
 
 function resetFst(){
@@ -538,10 +535,16 @@ window.cambiarEstado = function(estado){
 
 window.volverPanel = function(){ showScreen('panel'); }
 
-window.iniciarNuevoIngreso = function(){
-  currentVehId = null;
+window.iniciarNuevoIngreso = async function(){
   fst = resetFst();
   formStep = 0;
+  // Create Firebase doc immediately so it persists on reload
+  const tempId = 'borrador_'+Date.now();
+  currentVehId = tempId;
+  await setDoc(doc(db,'vehiculos',tempId),{
+    patente:'',estado:'Borrador',
+    fechaIngreso:serverTimestamp(),updatedAt:serverTimestamp()
+  });
   document.getElementById('f-patente').value='';
   document.getElementById('f-anio').value='';
   document.getElementById('f-marca').value='';
@@ -757,7 +760,10 @@ function buildData(){
 function autoSaveForm(){
   if(!currentVehId) return;
   const data=buildData();
-  updateDoc(doc(db,'vehiculos',currentVehId),{...data,updatedAt:serverTimestamp()}).catch(()=>{});
+  const estado = data.patente
+    ? (fst.trabajos.length||fst.repuestos.length ? 'Presupuesto en curso' : 'Datos tomados')
+    : 'Borrador';
+  updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()}).catch(()=>{});
 }
 
 async function guardarVehiculo(){
@@ -773,9 +779,19 @@ async function guardarVehiculo(){
 async function actualizarChecklist(){
   if(!currentVehId) return false;
   const data=buildData();
+  if(!data.patente){ toast('Ingresa la patente primero'); return false; }
   const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto en curso' : 'Datos tomados';
-  await updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()});
-  if(data.patente) syncToSupabase(data.patente, estado);
+  // If this was a borrador, rename the doc to use the patente as ID
+  const oldId = currentVehId;
+  const newId = data.patente.replace(/[^A-Z0-9]/g,'')+'_'+Date.now();
+  if(oldId.startsWith('borrador_')){
+    await setDoc(doc(db,'vehiculos',newId),{...data,estado,fechaIngreso:serverTimestamp(),updatedAt:serverTimestamp()});
+    await deleteDoc(doc(db,'vehiculos',oldId));
+    currentVehId = newId;
+  } else {
+    await updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()});
+  }
+  syncToSupabase(data.patente, estado);
   return true;
 }
 
@@ -815,12 +831,12 @@ function goFormStep(n){
   // nav buttons
   document.getElementById('btn-prev').style.display=n===0?'none':'block';
   document.getElementById('btn-next').textContent = n===FORM_STEPS-1 ? 'Guardar ✓' : 'Siguiente →';
-  if(n===FORM_STEPS-1) renderFormSummary();
 }
 
 window.nextStep = async function(){
   if(formStep===FORM_STEPS-1){
-    const ok = currentVehId ? await actualizarChecklist() : await guardarVehiculo();
+    // Last step: save
+    const ok = await actualizarChecklist();
     if(ok){
       toast('Guardado correctamente');
       setTimeout(()=>{ volverDesdeForm(); if(currentVehId) abrirDetalle(currentVehId); },600);
@@ -852,37 +868,25 @@ window.generarExcel = async function(){
   const btn = document.getElementById('btn-excel');
   if(btn){ btn.textContent='Generando...'; btn.disabled=true; }
   try{
-    const payload = {
-      patente:  v.patente||'',
-      marca:    v.marca||'',
-      modelo:   v.modelo||'',
-      anio:     v.anio||null,
-      km:       v.km||null,
-      combustible: v.combustible||null,
-      trabajos:    v.trabajos||[],
-      repuestos:   v.repuestos||[],
-      observaciones: v.observaciones||''
-    };
     const res = await fetch('https://excel-server-dbt.onrender.com/generar-excel',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
+      body:JSON.stringify({
+        patente:v.patente||'',marca:v.marca||'',modelo:v.modelo||'',
+        anio:v.anio||null,km:v.km||null,combustible:v.combustible||null,
+        trabajos:v.trabajos||[],repuestos:v.repuestos||[],
+        observaciones:v.observaciones||''
+      })
     });
-    if(!res.ok){ throw new Error('Error del servidor: '+res.status); }
+    if(!res.ok) throw new Error('Error '+res.status);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `Presupuesto_${(v.patente||'').toUpperCase()}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    a.href=url; a.download=`Presupuesto_${(v.patente||'').toUpperCase()}.xlsx`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
     toast('Excel descargado');
-  } catch(e){
-    console.error(e);
-    toast('Error: '+e.message);
-  }
+  }catch(e){ console.error(e); toast('Error: '+e.message); }
   if(btn){ btn.textContent='Descargar Excel'; btn.disabled=false; }
 }
 
