@@ -433,6 +433,7 @@ const MODELOS = {
 
 let vehiculos = {};
 let currentVehId = null;
+let currentPatente = null;
 let formStep = 0;
 const FORM_STEPS = 3;
 let fst = resetFst();
@@ -443,78 +444,102 @@ function resetFst(){
 }
 
 // REALTIME LISTENER
+// ============================================================
+// DATA LAYER: Supabase = source of truth, Firebase = checklist only
+// ============================================================
+let supavehiculos = {}; // keyed by patente
+
+function estadoDesdeObs(obs) {
+  if(!obs) return 'Pendiente de datos';
+  const o = obs.toLowerCase();
+  if(o.includes('enviado')) return 'Presupuesto enviado';
+  if(o.includes('terminado')) return 'Presupuesto terminado';
+  if(o.includes('con datos') || o.includes('datos')) return 'Con datos';
+  return 'Pendiente de datos';
+}
+
+async function cargarDesdeSupabase() {
+  try {
+    const {data, error} = await sb.from('vehiculos')
+      .select('id,patente,taller,ingreso,salida,obs')
+      .is('salida', null)
+      .order('ingreso', {ascending: true});
+    if(error) throw error;
+    if(!data) return;
+    supavehiculos = {};
+    data.forEach(v => {
+      const pat = (v.patente||'').toUpperCase().trim();
+      if(!pat) return;
+      supavehiculos[pat] = {
+        id: v.id,
+        patente: pat,
+        taller: v.taller||'',
+        ingreso: v.ingreso||'',
+        obs: v.obs||'',
+        estado: estadoDesdeObs(v.obs)
+      };
+    });
+    renderPanel();
+    const total = Object.keys(supavehiculos).length;
+    const pendientes = Object.values(supavehiculos).filter(v=>v.estado==='Pendiente de datos').length;
+    document.getElementById('nav-sub').textContent = `${total} vehículos · ${pendientes} sin datos`;
+  } catch(e) { console.error('Error cargando Supabase:', e); }
+}
+
+// Supabase realtime — instant updates when control app changes something
+sb.channel('presup-vehiculos')
+  .on('postgres_changes', {event:'*', schema:'public', table:'vehiculos'},
+    () => cargarDesdeSupabase())
+  .subscribe();
+
+// Firebase — only for checklist data
 onSnapshot(col, snap => {
   vehiculos = {};
   snap.forEach(d => vehiculos[d.id] = {...d.data(), id:d.id});
+  // Merge checklist data into supavehiculos
+  Object.values(vehiculos).forEach(fbv => {
+    const pat = (fbv.patente||'').toUpperCase().trim();
+    if(pat && supavehiculos[pat]) {
+      Object.assign(supavehiculos[pat], {
+        marca: fbv.marca, modelo: fbv.modelo, anio: fbv.anio,
+        km: fbv.km, combustible: fbv.combustible,
+        parabrisas: fbv.parabrisas, tapiz: fbv.tapiz,
+        accesorios: fbv.accesorios, accesoriosQty: fbv.accesoriosQty,
+        trabajos: fbv.trabajos, repuestos: fbv.repuestos,
+        observaciones: fbv.observaciones,
+        fbId: fbv.id  // keep Firebase doc ID for updates
+      });
+    }
+  });
   renderPanel();
 });
 
-// Sync vehicles from Supabase (control app) to Firebase
-async function syncDesdeControl(){
-  try {
-    const {data} = await sb.from('vehiculos').select('patente,taller,ingreso').is('salida',null);
-    if(!data) return;
-    for(const v of data){
-      const pat = (v.patente||'').toUpperCase().trim();
-      if(!pat) continue;
-      // Check if already in Firebase by patente
-      const existe = Object.values(vehiculos).find(fv=>(fv.patente||'').toUpperCase()===pat);
-      if(!existe){
-        const newId = pat.replace(/[^A-Z0-9]/g,'')+'_ctrl';
-        await setDoc(doc(db,'vehiculos',newId),{
-          patente: pat,
-          taller: v.taller||'',
-          estado: 'Pendiente de datos',
-          fechaIngreso: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-      }
-    }
-  } catch(e){ console.warn('Sync error:', e); }
-}
-
-// Also subscribe to Supabase realtime for instant sync
-try {
-  sb.channel('ctrl-vehiculos')
-    .on('postgres_changes',{event:'INSERT',schema:'public',table:'vehiculos'},
-      payload => { syncDesdeControl(); })
-    .subscribe();
-} catch(e){}
-
-// Initial sync + periodic refresh
-syncDesdeControl();
-setInterval(syncDesdeControl, 60000);
+// Initial load
+cargarDesdeSupabase();
 
 function renderPanel(){
-  // Tab 1: Pendiente de datos (sin checklist completado)
-  const pendientes = Object.values(vehiculos)
-    .filter(v=>['Pendiente de datos','Ingresado'].includes(v.estado))
-    .sort((a,b)=>(a.fechaIngreso?.seconds||0)-(b.fechaIngreso?.seconds||0));
+  const all = Object.values(supavehiculos);
 
-  // Tab 2: Pendiente de presupuesto (checklist paso 2 completado)
-  const conDatos = Object.values(vehiculos)
-    .filter(v=>['Con datos','Datos tomados','Presupuesto en curso'].includes(v.estado))
-    .sort((a,b)=>(a.fechaIngreso?.seconds||0)-(b.fechaIngreso?.seconds||0));
+  const pendientes  = all.filter(v=>v.estado==='Pendiente de datos')
+    .sort((a,b)=>(a.ingreso||'').localeCompare(b.ingreso||''));
+  const conDatos    = all.filter(v=>v.estado==='Con datos'||v.estado==='Presupuesto terminado')
+    .sort((a,b)=>(a.ingreso||'').localeCompare(b.ingreso||''));
+  const enviados    = all.filter(v=>v.estado==='Presupuesto enviado')
+    .sort((a,b)=>(b.ingreso||'').localeCompare(a.ingreso||''));
 
-  // Tab 3: Presupuesto enviado
-  const enviados = Object.values(vehiculos)
-    .filter(v=>['Presupuesto enviado','Enviado','Presupuesto terminado'].includes(v.estado))
-    .sort((a,b)=>(b.updatedAt?.seconds||0)-(a.updatedAt?.seconds||0));
-
-  // Update badges
-  const bp = document.getElementById('badge-pendiente');
+  // Badges
+  const bp   = document.getElementById('badge-pendiente');
   const bpre = document.getElementById('badge-presupuesto');
-  if(bp){ bp.textContent=pendientes.length; bp.style.display=pendientes.length?'block':'none'; }
-  if(bpre){ bpre.textContent=conDatos.length; bpre.style.display=conDatos.length?'block':'none'; }
+  if(bp){   bp.textContent=pendientes.length;  bp.style.display=pendientes.length?'block':'none'; }
+  if(bpre){ bpre.textContent=conDatos.length;  bpre.style.display=conDatos.length?'block':'none'; }
 
-  // Render each tab
-  renderVehList('list-pendiente', pendientes, 'Sin vehículos pendientes de datos');
-  renderVehList('list-presupuesto', conDatos, 'Sin vehículos pendientes de presupuesto');
-  renderVehList('list-enviado', enviados, 'Sin presupuestos enviados');
+  renderVehList('list-pendiente',   pendientes, 'Sin vehículos pendientes de datos');
+  renderVehList('list-presupuesto', conDatos,   'Sin vehículos pendientes de presupuesto');
+  renderVehList('list-enviado',     enviados,   'Sin presupuestos enviados');
 
-  // Nav subtitle
-  const total = pendientes.length + conDatos.length + enviados.length;
-  document.getElementById('nav-sub').textContent = `${pendientes.length} sin datos · ${conDatos.length} pendientes · ${enviados.length} enviados`;
+  const total = all.length;
+  document.getElementById('nav-sub').textContent =
+    `${pendientes.length} sin datos · ${conDatos.length} pendientes · ${enviados.length} enviados`;
 }
 
 function renderVehList(containerId, list, emptyMsg){
@@ -525,15 +550,15 @@ function renderVehList(containerId, list, emptyMsg){
     return;
   }
   el.innerHTML = list.map(v=>`
-    <div class="veh-card" onclick="abrirDetalle('${v.id}')">
+    <div class="veh-card" onclick="abrirDetalle('${v.patente}')">
       <div class="veh-header">
-        <span class="veh-patente">${(v.patente||'—').toUpperCase()}</span>
-        <span class="pill ${ESTADO_PILLS[v.estado]||'pill-new'}">${v.estado||'Pendiente de datos'}</span>
+        <span class="veh-patente">${v.patente}</span>
+        <span class="pill ${ESTADO_PILLS[v.estado]||'pill-new'}">${v.estado}</span>
       </div>
       <div class="veh-info">${[v.marca,v.modelo,v.anio].filter(Boolean).join(' ')||'Sin datos'}</div>
       <div class="veh-meta">
         ${v.taller?`<span class="taller-tag">${v.taller}</span>`:''}
-        ${v.fechaIngreso?`<span class="fecha-tag">${formatFecha(v.fechaIngreso)}</span>`:''}
+        ${v.ingreso?`<span class="fecha-tag">${v.ingreso.split('-').reverse().map((x,i)=>i===2?x.slice(2):x).join('-')}</span>`:''}
         ${v.km?`<span class="fecha-tag">${Number(v.km).toLocaleString('es-CL')} km</span>`:''}
       </div>
     </div>`).join('');
@@ -556,32 +581,35 @@ function formatFecha(ts){
   return d.toLocaleDateString('es-CL',{day:'2-digit',month:'2-digit'});
 }
 
-window.abrirDetalle = function(id){
-  currentVehId = id;
-  const v = vehiculos[id];
-  if(!v) return;
-  document.getElementById('d-patente').textContent = (v.patente||'—').toUpperCase();
+window.abrirDetalle = function(patente){
+  const pat = (patente||'').toUpperCase().trim();
+  const v = supavehiculos[pat];
+  if(!v){ toast('Vehículo no encontrado'); return; }
+  currentVehId = v.fbId || pat; // use Firebase ID if exists, else patente
+  currentPatente = pat;
+
+  document.getElementById('d-patente').textContent = pat;
   document.getElementById('d-sub').textContent = [v.marca,v.modelo,v.anio].filter(Boolean).join(' ')||'Sin datos';
 
-  // Status buttons — manual override
+  // Status buttons
   const sr = document.getElementById('status-row');
   const statusLabels = {
-    'Pendiente de datos': 'Sin datos',
-    'Con datos': 'Con datos',
-    'Presupuesto terminado': 'Terminado',
-    'Presupuesto enviado': 'Enviado'
+    'Pendiente de datos':'Sin datos','Con datos':'Con datos',
+    'Presupuesto terminado':'Terminado','Presupuesto enviado':'Enviado'
   };
-  sr.innerHTML = ESTADOS.map(e=>`<button class="status-btn ${v.estado===e?'active':''}" onclick="cambiarEstado('${e}')">${statusLabels[e]||e}</button>`).join('');
+  sr.innerHTML = ESTADOS.map(e=>`
+    <button class="status-btn ${v.estado===e?'active':''}" onclick="cambiarEstado('${e}')">${statusLabels[e]||e}</button>
+  `).join('');
 
   // Info grid
   const ig = document.getElementById('d-info-grid');
   ig.innerHTML = [
     ['Taller', v.taller||'—'],
-    ['KM', v.km?Number(v.km).toLocaleString('es-CL')+'':'—'],
+    ['KM', v.km?Number(v.km).toLocaleString('es-CL')+' km':'—'],
     ['Combustible', v.combustible?v.combustible+'/4':'—'],
     ['Parabrisas', v.parabrisas||'—'],
     ['Tapiz', v.tapiz||'—'],
-    ['Ingreso', formatFecha(v.fechaIngreso)||'—'],
+    ['Ingreso', v.ingreso||'—'],
   ].map(([l,val])=>`<div class="info-cell"><div class="info-cell-label">${l}</div><div class="info-cell-val">${val}</div></div>`).join('');
 
   // Trabajos y repuestos
@@ -594,7 +622,7 @@ window.abrirDetalle = function(id){
     document.getElementById('d-repuestos').innerHTML = repuestos.map(r=>`<span class="rep-tag">${r}</span>`).join('')||'<span style="color:var(--text3);font-size:13px">Ninguno</span>';
   } else { repsec.style.display='none'; }
 
-  // Obs
+  // Observaciones
   const obs = v.observaciones||'';
   const obsec = document.getElementById('d-obs-section');
   if(obs){ obsec.style.display='block'; document.getElementById('d-obs').textContent=obs; }
@@ -602,22 +630,56 @@ window.abrirDetalle = function(id){
 
   // Botones
   const tieneChecklist = !!(v.trabajos?.length||v.repuestos?.length||v.parabrisas);
-  const puedeExcel = ['Presupuesto terminado','Presupuesto enviado','Enviado','Presupuesto en curso'].includes(v.estado);
+  const puedeExcel = ['Presupuesto terminado','Presupuesto enviado'].includes(v.estado);
   document.getElementById('btn-ir-checklist').textContent = tieneChecklist ? 'Editar checklist' : 'Tomar datos';
   document.getElementById('btn-excel').style.display = puedeExcel ? 'block' : 'none';
 
   showScreen('detail');
 }
 
-window.cambiarEstado = function(estado){
-  if(!currentVehId) return;
-  const extra = estado==='Entregado'?{fechaSalida:serverTimestamp()}:{};
-  updateDoc(doc(db,'vehiculos',currentVehId),{estado,...extra,updatedAt:serverTimestamp()});
-  const v = vehiculos[currentVehId];
-  if(v?.patente) syncToSupabase(v.patente, estado);
-  const sr=document.getElementById('status-row');
-  sr.querySelectorAll('.status-btn').forEach(b=>b.classList.toggle('active',b.textContent===estado));
-  toast('Estado actualizado');
+window.cambiarEstado = async function(estado){
+  if(!currentPatente) return;
+  const pat = currentPatente;
+  const v = supavehiculos[pat];
+  if(!v) return;
+
+  // Map estado to obs value for Supabase
+  const obsMap = {
+    'Pendiente de datos': null,
+    'Con datos': 'Con datos',
+    'Presupuesto terminado': 'Presupuesto terminado',
+    'Presupuesto enviado': 'Presupuesto Enviado'
+  };
+  const newObs = obsMap[estado];
+
+  // Update Supabase
+  try {
+    await sb.from('vehiculos').update({obs: newObs}).eq('patente', pat);
+    // Update local state immediately (realtime will also update)
+    if(supavehiculos[pat]){
+      supavehiculos[pat].obs = newObs||'';
+      supavehiculos[pat].estado = estado;
+    }
+    // Also update Firebase if doc exists
+    if(v.fbId){
+      updateDoc(doc(db,'vehiculos',v.fbId),{estado,updatedAt:serverTimestamp()}).catch(()=>{});
+    }
+    // Refresh status buttons
+    const sr = document.getElementById('status-row');
+    const statusLabels = {'Pendiente de datos':'Sin datos','Con datos':'Con datos','Presupuesto terminado':'Terminado','Presupuesto enviado':'Enviado'};
+    sr.querySelectorAll('.status-btn').forEach(b=>{
+      const e = ESTADOS[Array.from(sr.children).indexOf(b)];
+      b.classList.toggle('active', e===estado);
+    });
+    // Update excel button
+    const puedeExcel = ['Presupuesto terminado','Presupuesto enviado'].includes(estado);
+    document.getElementById('btn-excel').style.display = puedeExcel ? 'block' : 'none';
+    renderPanel();
+    toast('Estado: '+estado);
+  } catch(e) {
+    console.error(e);
+    toast('Error al cambiar estado');
+  }
 }
 
 window.volverPanel = function(){ 
@@ -627,31 +689,43 @@ window.volverPanel = function(){
 window.iniciarNuevoIngreso = function(){ showScreen(currentTab||'pendiente'); }
 
 window.abrirChecklist = function(){
-  const v = vehiculos[currentVehId];
+  const pat = currentPatente;
+  if(!pat) return;
+  const v = supavehiculos[pat];
   if(!v) return;
+
+  // Load form state from merged data (Firebase checklist + Supabase vehicle)
   fst = {
     combustible: v.combustible||0,
     parabrisas: v.parabrisas||'',
     tapiz: v.tapiz||'',
     zonasActivas: new Set(v.zonasActivas||[]),
-    danosZona: Object.fromEntries(Object.entries(v.danosZona||{}).map(([k,vv])=>[k,{repSugeridos:new Set(vv.repSugeridos||[])}])),
+    danosZona: Object.fromEntries(Object.entries(v.danosZona||{}).map(([k,vv])=>[k,{repSugeridos:new Set(vv?.repSugeridos||[])}])),
     trabajos: v.trabajos||[],
     repuestos: v.repuestos||[],
     accesorios: v.accesorios||{},
     accesoriosQty: v.accesoriosQty||{}
   };
-  document.getElementById('f-patente').value=v.patente||'';
-  document.getElementById('f-anio').value=v.anio||'';
-  if(v.marca){ document.getElementById('f-marca').value=v.marca; updateModelos(); }
-  if(v.modelo) document.getElementById('f-modelo').value=v.modelo;
-  document.getElementById('f-km').value=v.km||'';
-  document.getElementById('f-obs').value=v.observaciones||'';
+
+  // Pre-fill form fields
+  document.getElementById('f-patente').value = pat;
+  document.getElementById('f-anio').value = v.anio||'';
+  document.getElementById('f-km').value = v.km||'';
+  document.getElementById('f-obs').value = v.observaciones||'';
+
+  if(v.marca){
+    document.getElementById('f-marca').value = v.marca;
+    updateModelos();
+  }
+  if(v.modelo) document.getElementById('f-modelo').value = v.modelo;
   setFuel(fst.combustible);
   if(fst.parabrisas) setPB(fst.parabrisas);
   if(fst.tapiz) setTapiz(fst.tapiz);
-  renderAccGrid();renderZonaGrid();renderWorking();renderReps();
-  document.getElementById('form-nav-title').textContent=(v.patente||'').toUpperCase();
-  document.getElementById('form-nav-sub').textContent='Editando checklist';
+
+  renderAccGrid(); renderWorking(); renderReps();
+
+  document.getElementById('form-nav-title').textContent = pat;
+  document.getElementById('form-nav-sub').textContent = v.taller||'';
   goFormStep(0);
   showScreen('form');
 }
@@ -842,16 +916,44 @@ async function guardarVehiculo(){
 }
 
 async function actualizarChecklist(){
-  if(!currentVehId) return false;
-  const data=buildData();
+  const pat = currentPatente;
+  if(!pat){ toast('Error: no hay patente seleccionada'); return false; }
+
+  const data = buildData();
   if(!data.patente){ toast('Ingresa la patente primero'); return false; }
-  // Estado based on which step we're completing
-  // formStep 0 or 1 (datos + accesorios) → Con datos
-  // formStep 2 (trabajos/repuestos) → Presupuesto terminado
+
+  // Determine estado based on step
   const estado = (fst.trabajos?.length||fst.repuestos?.length)
     ? 'Presupuesto terminado' : 'Con datos';
-  await updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()});
-  syncToSupabase(data.patente, estado);
+
+  // Save checklist to Firebase (using patente as document ID for persistence)
+  const fbDocId = pat.replace(/[^A-Z0-9]/g,'');
+  try {
+    await setDoc(doc(db,'vehiculos',fbDocId), {
+      ...data,
+      estado,
+      patente: pat,
+      updatedAt: serverTimestamp()
+    });
+    // Update Firebase ID in local state
+    if(supavehiculos[pat]) supavehiculos[pat].fbId = fbDocId;
+  } catch(e) { console.warn('Firebase save error:', e); }
+
+  // Update Supabase estado (source of truth)
+  const obsMap = {
+    'Con datos': 'Con datos',
+    'Presupuesto terminado': 'Presupuesto terminado'
+  };
+  try {
+    await sb.from('vehiculos').update({obs: obsMap[estado]}).eq('patente', pat);
+    if(supavehiculos[pat]){
+      supavehiculos[pat].estado = estado;
+      supavehiculos[pat].obs = obsMap[estado]||'';
+      // Update merged checklist data
+      Object.assign(supavehiculos[pat], data);
+    }
+  } catch(e) { console.error('Supabase update error:', e); return false; }
+
   return true;
 }
 
@@ -929,33 +1031,33 @@ window.eliminarConfirmado = async function(){
 
 // EXCEL
 window.generarExcel = async function(){
-  const v = vehiculos[currentVehId]; if(!v) return;
+  const pat = currentPatente;
+  const v = pat ? supavehiculos[pat] : null;
+  if(!v) return;
   const btn = document.getElementById('btn-excel');
   if(btn){ btn.textContent='Generando...'; btn.disabled=true; }
   try{
     const res = await fetch('https://excel-server-dbt.onrender.com/generar-excel',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+      method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        patente: v.patente||'', marca: v.marca||'', modelo: v.modelo||'',
-        anio: v.anio||null, km: v.km||null, combustible: v.combustible||null,
-        trabajos: v.trabajos||[], repuestos: v.repuestos||[],
-        observaciones: v.observaciones||''
+        patente:v.patente||'', marca:v.marca||'', modelo:v.modelo||'',
+        anio:v.anio||null, km:v.km||null, combustible:v.combustible||null,
+        trabajos:v.trabajos||[], repuestos:v.repuestos||[],
+        observaciones:v.observaciones||''
       })
     });
     if(!res.ok) throw new Error('Error servidor: '+res.status);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href=url; a.download=`Presupuesto_${(v.patente||'').toUpperCase()}.xlsx`;
+    a.href=url; a.download=`Presupuesto_${pat}.xlsx`;
     document.body.appendChild(a); a.click();
     document.body.removeChild(a); URL.revokeObjectURL(url);
     toast('Excel descargado');
-    // Auto-move to "Presupuesto enviado"
     cambiarEstado('Presupuesto enviado');
   } catch(e){
     console.error(e);
-    toast('Error: '+(e.message||'no se pudo conectar'));
+    toast('Error: '+(e.message||'no se pudo conectar al servidor'));
   }
   if(btn){ btn.textContent='Descargar Excel'; btn.disabled=false; }
 }
