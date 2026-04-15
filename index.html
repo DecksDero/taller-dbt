@@ -56,7 +56,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
 
 /* TAB BAR */
 .tabbar{display:flex;border-top:0.5px solid var(--border);background:var(--bg);padding:8px 0 env(safe-area-inset-bottom,8px);position:sticky;bottom:0}
-.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px;cursor:pointer;color:var(--text3);font-size:11px;font-weight:500;border:none;background:none;transition:color .15s}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px;cursor:pointer;color:var(--text3);font-size:11px;font-weight:500;border:none;background:none;transition:color .15s;position:relative}
+.tab-badge{position:absolute;top:2px;right:8px;background:var(--red);color:#fff;border-radius:10px;font-size:9px;font-weight:700;padding:1px 4px;min-width:14px;text-align:center;line-height:14px}
 .tab.active{color:var(--blue)}
 .tab-icon{font-size:20px}
 
@@ -184,15 +185,25 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
     <div style="display:flex;align-items:center;gap:10px">
       <img src="logo.png" style="width:36px;height:36px;border-radius:8px;object-fit:cover" alt="DBT">
       <div>
-        <div class="nav-title">Presupuestos</div>
-        <div class="nav-sub" id="nav-sub">Sincronizando...</div>
+        <div class="nav-title">Taller DBT</div>
+        <div class="nav-sub" id="nav-sub">Cargando...</div>
       </div>
     </div>
   </div>
 
-  <!-- PANEL -->
-  <div class="screen active" id="screen-panel">
-    <div id="panel-list"></div>
+  <!-- PANEL PENDIENTE DE DATOS -->
+  <div class="screen active" id="screen-pendiente">
+    <div id="list-pendiente"></div>
+  </div>
+
+  <!-- PANEL PENDIENTE DE PRESUPUESTO -->
+  <div class="screen" id="screen-presupuesto">
+    <div id="list-presupuesto"></div>
+  </div>
+
+  <!-- PANEL ENVIADO -->
+  <div class="screen" id="screen-enviado">
+    <div id="list-enviado"></div>
   </div>
 
   <!-- DETALLE -->
@@ -284,8 +295,6 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
         </div>
       </div>
 
-
-
       <!-- PASO 3: Trabajos y repuestos -->
       <div class="step-form" id="sf-2">
         <div class="section-label">Trabajos de reparación</div>
@@ -305,7 +314,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
       </div>
 
       <!-- PASO 4: Resumen -->
-      <div class="step-form" id="sf-4">
+      <div class="step-form" id="sf-2">
         <div class="section-label">Resumen</div>
         <div id="form-summary"></div>
       </div>
@@ -318,19 +327,20 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM San
   </div>
 
   <div class="tabbar" id="main-tabbar">
-    <button class="tab active" id="tab-panel" onclick="switchTab('panel')">
-      <span class="tab-icon">◫</span>Panel
+    <button class="tab active" id="tab-pendiente" onclick="switchTab('pendiente')">
+      <span class="tab-icon">📋</span>Sin datos
+      <span class="tab-badge" id="badge-pendiente" style="display:none"></span>
     </button>
-    <button class="tab" id="tab-stats" onclick="switchTab('stats')">
-      <span class="tab-icon">◈</span>Resumen
+    <button class="tab" id="tab-presupuesto" onclick="switchTab('presupuesto')">
+      <span class="tab-icon">📝</span>Presupuesto
+      <span class="tab-badge" id="badge-presupuesto" style="display:none"></span>
+    </button>
+    <button class="tab" id="tab-enviado" onclick="switchTab('enviado')">
+      <span class="tab-icon">✅</span>Enviado
     </button>
   </div>
 
-  <!-- STATS SCREEN -->
-  <div class="screen" id="screen-stats" style="display:none">
-    <div class="section-label">En taller ahora</div>
-    <div id="stats-content"></div>
-  </div>
+
 </div>
 
 <div class="toast" id="toast"></div>
@@ -368,25 +378,28 @@ const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 
 async function syncToSupabase(patente, estado) {
   if(!patente) return;
-  const pat = patente.toUpperCase().trim();
-  const {data} = await sb.from('vehiculos').select('id').eq('patente', pat).maybeSingle();
-  if(!data) return;
-  let obs = null;
-  if(estado === 'Con datos') obs = 'Con datos';
-  if(estado === 'Presupuesto terminado') obs = 'Presupuesto terminado';
-  if(estado === 'Presupuesto enviado') obs = 'Presupuesto Enviado';
-  if(obs) await sb.from('vehiculos').update({obs}).eq('patente', pat);
+  try {
+    const pat = patente.toUpperCase().trim();
+    const {data} = await sb.from('vehiculos').select('id').eq('patente', pat).maybeSingle();
+    if(!data) return;
+    let obs = null;
+    if(estado === 'Con datos') obs = 'Con datos';
+    if(estado === 'Presupuesto terminado') obs = 'Presupuesto terminado';
+    if(estado === 'Presupuesto enviado') obs = 'Presupuesto Enviado';
+    if(obs) await sb.from('vehiculos').update({obs}).eq('patente', pat);
+  } catch(e){ console.warn('syncToSupabase error:', e); }
 }
 
-const ESTADOS = ['Pendiente de datos','Con datos','Presupuesto terminado','Presupuesto enviado','En reparación','Listo','Entregado'];
+const ESTADOS = ['Pendiente de datos','Con datos','Presupuesto terminado','Presupuesto enviado'];
 const ESTADO_PILLS = {
-  'Pendiente de datos':'pill-new',
-  'Con datos':'pill-datos',
-  'Presupuesto terminado':'pill-presup',
-  'Presupuesto enviado':'pill-enviado',
-  'En reparación':'pill-reparando',
-  'Listo':'pill-listo',
-  'Entregado':'pill-entregado'
+  'Pendiente de datos': 'pill-new',
+  'Ingresado':          'pill-new',
+  'Con datos':          'pill-datos',
+  'Datos tomados':      'pill-datos',
+  'Presupuesto terminado': 'pill-presup',
+  'Presupuesto en curso':  'pill-presup',
+  'Presupuesto enviado':   'pill-enviado',
+  'Enviado':               'pill-enviado',
 };
 const ACCESORIOS = [
   {key:'Documentos',tipo:'check'},{key:'Kit',tipo:'check'},{key:'TAG',tipo:'check'},
@@ -406,7 +419,6 @@ const REP_POR_ZONA = {
 const MODELOS = {
   'Citroën':['Berlingo','C3','C4','Jumpy','Dispatch','Otro'],
   'Peugeot':['Partner','Expert','308','208','Boxer','Otro'],
-  'Renault':['Kangoo','Duster','Logan','Sandero','Master','Otro'],
   'Volkswagen':['Amarok','Transporter','Polo','Golf','Crafter','Otro'],
   'Toyota':['Hilux','Land Cruiser','Corolla','RAV4','Hiace','Otro'],
   'Nissan':['NP300','Frontier','Qashqai','X-Trail','Urvan','Otro'],
@@ -414,6 +426,7 @@ const MODELOS = {
   'Kia':['Sportage','Sorento','Morning','Stonic','K2700','Otro'],
   'Chevrolet':['D-Max','S10','Captiva','Aveo','N300','Otro'],
   'Ford':['F-150','Ranger','Escape','Transit','Fiesta','Otro'],
+  'Renault':['Kangoo','Duster','Logan','Sandero','Master','Trafic','Otro'],
   'Mitsubishi':['L200','Outlander','ASX','Galant','Canter','Otro'],
   'Otra':['Otro']
 };
@@ -423,6 +436,7 @@ let currentVehId = null;
 let formStep = 0;
 const FORM_STEPS = 3;
 let fst = resetFst();
+let currentTab = 'pendiente';
 
 function resetFst(){
   return {combustible:0,parabrisas:'',tapiz:'',zonasActivas:new Set(),danosZona:{},trabajos:[],repuestos:[],accesorios:{},accesoriosQty:{}};
@@ -433,47 +447,88 @@ onSnapshot(col, snap => {
   vehiculos = {};
   snap.forEach(d => vehiculos[d.id] = {...d.data(), id:d.id});
   renderPanel();
-  renderStats();
-  const activos = Object.values(vehiculos).filter(v=>v.estado!=='Entregado').length;
-  const total = Object.keys(vehiculos).length;
-  document.getElementById('nav-sub').textContent = `${activos} activos · ${total} total`;
 });
 
-// Sync new vehicles from Supabase (control app) to Firebase (presupuestos)
-async function syncNuevosDeSuapabase(){
-  const {data} = await sb.from('vehiculos').select('patente,taller,ingreso').is('salida',null).order('id',{ascending:false}).limit(50);
-  if(!data) return;
-  for(const v of data){
-    const pat = v.patente.toUpperCase().trim();
-    // Check if already in Firebase
-    const exists = Object.values(vehiculos).find(fv => (fv.patente||'').toUpperCase()===pat);
-    if(!exists){
-      // New vehicle from control → add to Firebase as "Pendiente de datos"
-      const newId = pat.replace(/[^A-Z0-9]/g,'')+'_ctrl';
-      await setDoc(doc(db,'vehiculos',newId),{
-        patente:pat, taller:v.taller||'', estado:'Pendiente de datos',
-        fechaIngreso:serverTimestamp(), updatedAt:serverTimestamp()
-      });
+// Sync vehicles from Supabase (control app) to Firebase
+async function syncDesdeControl(){
+  try {
+    const {data} = await sb.from('vehiculos').select('patente,taller,ingreso').is('salida',null);
+    if(!data) return;
+    for(const v of data){
+      const pat = (v.patente||'').toUpperCase().trim();
+      if(!pat) continue;
+      // Check if already in Firebase by patente
+      const existe = Object.values(vehiculos).find(fv=>(fv.patente||'').toUpperCase()===pat);
+      if(!existe){
+        const newId = pat.replace(/[^A-Z0-9]/g,'')+'_ctrl';
+        await setDoc(doc(db,'vehiculos',newId),{
+          patente: pat,
+          taller: v.taller||'',
+          estado: 'Pendiente de datos',
+          fechaIngreso: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
     }
-  }
+  } catch(e){ console.warn('Sync error:', e); }
 }
 
-// Run sync on load and every 2 minutes
-syncNuevosDeSuapabase();
-setInterval(syncNuevosDeSuapabase, 120000);
+// Also subscribe to Supabase realtime for instant sync
+try {
+  sb.channel('ctrl-vehiculos')
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'vehiculos'},
+      payload => { syncDesdeControl(); })
+    .subscribe();
+} catch(e){}
+
+// Initial sync + periodic refresh
+syncDesdeControl();
+setInterval(syncDesdeControl, 60000);
 
 function renderPanel(){
-  const el = document.getElementById('panel-list');
-  const list = Object.values(vehiculos).filter(v=>v.estado!=='Entregado').sort((a,b)=>(b.updatedAt?.seconds||0)-(a.updatedAt?.seconds||0));
-  const entregados = Object.values(vehiculos).filter(v=>v.estado==='Entregado');
-  if(!list.length && !entregados.length){
-    el.innerHTML=`<div class="empty"><div class="empty-icon">◫</div><div class="empty-text">Sin vehículos activos</div></div>`;return;
+  // Tab 1: Pendiente de datos (sin checklist completado)
+  const pendientes = Object.values(vehiculos)
+    .filter(v=>['Pendiente de datos','Ingresado'].includes(v.estado))
+    .sort((a,b)=>(a.fechaIngreso?.seconds||0)-(b.fechaIngreso?.seconds||0));
+
+  // Tab 2: Pendiente de presupuesto (checklist paso 2 completado)
+  const conDatos = Object.values(vehiculos)
+    .filter(v=>['Con datos','Datos tomados','Presupuesto en curso'].includes(v.estado))
+    .sort((a,b)=>(a.fechaIngreso?.seconds||0)-(b.fechaIngreso?.seconds||0));
+
+  // Tab 3: Presupuesto enviado
+  const enviados = Object.values(vehiculos)
+    .filter(v=>['Presupuesto enviado','Enviado','Presupuesto terminado'].includes(v.estado))
+    .sort((a,b)=>(b.updatedAt?.seconds||0)-(a.updatedAt?.seconds||0));
+
+  // Update badges
+  const bp = document.getElementById('badge-pendiente');
+  const bpre = document.getElementById('badge-presupuesto');
+  if(bp){ bp.textContent=pendientes.length; bp.style.display=pendientes.length?'block':'none'; }
+  if(bpre){ bpre.textContent=conDatos.length; bpre.style.display=conDatos.length?'block':'none'; }
+
+  // Render each tab
+  renderVehList('list-pendiente', pendientes, 'Sin vehículos pendientes de datos');
+  renderVehList('list-presupuesto', conDatos, 'Sin vehículos pendientes de presupuesto');
+  renderVehList('list-enviado', enviados, 'Sin presupuestos enviados');
+
+  // Nav subtitle
+  const total = pendientes.length + conDatos.length + enviados.length;
+  document.getElementById('nav-sub').textContent = `${pendientes.length} sin datos · ${conDatos.length} pendientes · ${enviados.length} enviados`;
+}
+
+function renderVehList(containerId, list, emptyMsg){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  if(!list.length){
+    el.innerHTML=`<div class="empty"><div class="empty-icon">◫</div><div class="empty-text">${emptyMsg}</div></div>`;
+    return;
   }
-  el.innerHTML = [...list,...entregados].map(v=>`
-    <div class="veh-card ${v.estado==='Presupuesto en curso'?'highlight':''}" onclick="abrirDetalle('${v.id}')">
+  el.innerHTML = list.map(v=>`
+    <div class="veh-card" onclick="abrirDetalle('${v.id}')">
       <div class="veh-header">
         <span class="veh-patente">${(v.patente||'—').toUpperCase()}</span>
-        <span class="pill ${ESTADO_PILLS[v.estado]||'pill-new'}">${v.estado||'Ingresado'}</span>
+        <span class="pill ${ESTADO_PILLS[v.estado]||'pill-new'}">${v.estado||'Pendiente de datos'}</span>
       </div>
       <div class="veh-info">${[v.marca,v.modelo,v.anio].filter(Boolean).join(' ')||'Sin datos'}</div>
       <div class="veh-meta">
@@ -508,9 +563,15 @@ window.abrirDetalle = function(id){
   document.getElementById('d-patente').textContent = (v.patente||'—').toUpperCase();
   document.getElementById('d-sub').textContent = [v.marca,v.modelo,v.anio].filter(Boolean).join(' ')||'Sin datos';
 
-  // Status buttons
+  // Status buttons — manual override
   const sr = document.getElementById('status-row');
-  sr.innerHTML = ESTADOS.map(e=>`<button class="status-btn ${v.estado===e?'active':''}" onclick="cambiarEstado('${e}')">${e}</button>`).join('');
+  const statusLabels = {
+    'Pendiente de datos': 'Sin datos',
+    'Con datos': 'Con datos',
+    'Presupuesto terminado': 'Terminado',
+    'Presupuesto enviado': 'Enviado'
+  };
+  sr.innerHTML = ESTADOS.map(e=>`<button class="status-btn ${v.estado===e?'active':''}" onclick="cambiarEstado('${e}')">${statusLabels[e]||e}</button>`).join('');
 
   // Info grid
   const ig = document.getElementById('d-info-grid');
@@ -540,9 +601,10 @@ window.abrirDetalle = function(id){
   else { obsec.style.display='none'; }
 
   // Botones
-  const tieneChecklist = !!(v.trabajos||v.repuestos||v.parabrisas);
+  const tieneChecklist = !!(v.trabajos?.length||v.repuestos?.length||v.parabrisas);
+  const puedeExcel = ['Presupuesto terminado','Presupuesto enviado','Enviado','Presupuesto en curso'].includes(v.estado);
   document.getElementById('btn-ir-checklist').textContent = tieneChecklist ? 'Editar checklist' : 'Tomar datos';
-  document.getElementById('btn-excel').style.display = tieneChecklist ? 'block' : 'none';
+  document.getElementById('btn-excel').style.display = puedeExcel ? 'block' : 'none';
 
   showScreen('detail');
 }
@@ -553,15 +615,16 @@ window.cambiarEstado = function(estado){
   updateDoc(doc(db,'vehiculos',currentVehId),{estado,...extra,updatedAt:serverTimestamp()});
   const v = vehiculos[currentVehId];
   if(v?.patente) syncToSupabase(v.patente, estado);
-  toast('Estado: '+estado);
   const sr=document.getElementById('status-row');
   sr.querySelectorAll('.status-btn').forEach(b=>b.classList.toggle('active',b.textContent===estado));
   toast('Estado actualizado');
 }
 
-window.volverPanel = function(){ showScreen('panel'); }
+window.volverPanel = function(){ 
+  showScreen(currentTab||'pendiente'); 
+}
 
-window.iniciarNuevoIngreso = function(){ showScreen('panel'); }
+window.iniciarNuevoIngreso = function(){ showScreen(currentTab||'pendiente'); }
 
 window.abrirChecklist = function(){
   const v = vehiculos[currentVehId];
@@ -577,54 +640,46 @@ window.abrirChecklist = function(){
     accesorios: v.accesorios||{},
     accesoriosQty: v.accesoriosQty||{}
   };
-  // Pre-fill form fields
-  document.getElementById('f-patente').value = v.patente||'';
-  document.getElementById('f-anio').value = v.anio||'';
-  document.getElementById('f-km').value = v.km||'';
-  document.getElementById('f-obs').value = v.observaciones||'';
-  if(v.marca){
-    document.getElementById('f-marca').value = v.marca;
-    updateModelos();
-  }
-  if(v.modelo) document.getElementById('f-modelo').value = v.modelo;
+  document.getElementById('f-patente').value=v.patente||'';
+  document.getElementById('f-anio').value=v.anio||'';
+  if(v.marca){ document.getElementById('f-marca').value=v.marca; updateModelos(); }
+  if(v.modelo) document.getElementById('f-modelo').value=v.modelo;
+  document.getElementById('f-km').value=v.km||'';
+  document.getElementById('f-obs').value=v.observaciones||'';
   setFuel(fst.combustible);
   if(fst.parabrisas) setPB(fst.parabrisas);
   if(fst.tapiz) setTapiz(fst.tapiz);
-  renderAccGrid(); renderWorking(); renderReps();
-  document.getElementById('form-nav-title').textContent = (v.patente||'').toUpperCase();
-  document.getElementById('form-nav-sub').textContent = v.estado||'';
+  renderAccGrid();renderZonaGrid();renderWorking();renderReps();
+  document.getElementById('form-nav-title').textContent=(v.patente||'').toUpperCase();
+  document.getElementById('form-nav-sub').textContent='Editando checklist';
   goFormStep(0);
-  document.getElementById('main-tabbar').style.display='none';
-  document.getElementById('main-nav').style.display='none';
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById('screen-form').classList.add('active');
+  showScreen('form');
 }
 
 window.volverDesdeForm = function(){
   document.getElementById('main-tabbar').style.display='flex';
   document.getElementById('main-nav').style.display='flex';
   document.getElementById('screen-form').classList.remove('active');
-  if(currentVehId && vehiculos[currentVehId]){
-    showScreen('detail');
-    abrirDetalle(currentVehId);
-  } else {
-    showScreen('panel');
-  }
+  if(currentVehId){ showScreen('detail'); abrirDetalle(currentVehId); }
+  else showScreen(currentTab||'pendiente');
 }
 
 function showScreen(name){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById('screen-'+name).classList.add('active');
-  document.getElementById('main-tabbar').style.display='flex';
-  document.getElementById('main-nav').style.display='flex';
+  const el = document.getElementById('screen-'+name);
+  if(el) el.classList.add('active');
+  // Show/hide nav and tabbar
+  const isForm = name==='form';
+  document.getElementById('main-nav').style.display = isForm?'none':'flex';
+  document.getElementById('main-tabbar').style.display = isForm?'none':'flex';
 }
 
 window.switchTab = function(tab){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('tab-'+tab).classList.add('active');
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById('screen-'+tab).classList.add('active');
-  if(tab==='stats') renderStats();
+  ['pendiente','presupuesto','enviado'].forEach(t=>{
+    document.getElementById('tab-'+t).classList.toggle('active', t===tab);
+    document.getElementById('screen-'+t).classList.toggle('active', t===tab);
+  });
+  currentTab = tab;
 }
 
 // FORM LOGIC
@@ -638,7 +693,7 @@ window.updateModelos = function(){
     if(otraMarcaRow) otraMarcaRow.style.display='none';
     return;
   }
-  if(otraMarcaRow) otraMarcaRow.style.display = marca==='Otra' ? 'flex' : 'none';
+  if(otraMarcaRow) otraMarcaRow.style.display = marca==='Otra' ? 'block' : 'none';
   (MODELOS[marca]||['Otro']).forEach(m=>{const o=document.createElement('option');o.value=m;o.textContent=m;sel.appendChild(o);});
   checkOtroModelo();
 }
@@ -738,13 +793,13 @@ window.removeRepuesto = function(i){fst.repuestos.splice(i,1);renderReps();autoS
 
 function buildObs(){
   const parts=[];
-  if(fst.parabrisas&&fst.parabrisas!=='OK')parts.push('Parabrisas '+fst.parabrisas.toLowerCase()+'.');
-  if(fst.tapiz==='Sucio')parts.push('Tapiz sucio.');
-  const p=fst.accesoriosQty['Pisos']||0; if(p)parts.push('Pisos: '+p+'.');
-  const pa=fst.accesoriosQty['Patentes']||0; if(pa)parts.push('Patentes: '+pa+'.');
-  const faltantes=ACCESORIOS.filter(a=>a.tipo==='check'&&!fst.accesorios[a.key]).map(a=>a.key);
+  if(fst.parabrisas&&fst.parabrisas!=='OK') parts.push('Parabrisas '+fst.parabrisas.toLowerCase()+'.');
+  if(fst.tapiz==='Sucio') parts.push('Tapiz sucio.');
+  const p=fst.accesoriosQty?.['Pisos']||0; if(p) parts.push('Pisos: '+p+'.');
+  const pa=fst.accesoriosQty?.['Patentes']||0; if(pa) parts.push('Patentes: '+pa+'.');
+  const faltantes=ACCESORIOS.filter(a=>a.tipo==='check'&&!fst.accesorios?.[a.key]).map(a=>a.key);
   if(faltantes.length) parts.push('Faltante: '+faltantes.join(', ')+'.');
-  const obs=document.getElementById('f-obs')?.value||''; if(obs)parts.push(obs);
+  const obs=document.getElementById('f-obs')?.value||''; if(obs) parts.push(obs);
   return parts.join(' ');
 }
 
@@ -770,14 +825,17 @@ function buildData(){
 function autoSaveForm(){
   if(!currentVehId) return;
   const data=buildData();
-  updateDoc(doc(db,'vehiculos',currentVehId),{...data,updatedAt:serverTimestamp()}).catch(()=>{});
+  const estado = data.patente
+    ? (fst.trabajos?.length||fst.repuestos?.length ? 'Presupuesto terminado' : 'Con datos')
+    : 'Pendiente de datos';
+  updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()}).catch(()=>{});
 }
 
 async function guardarVehiculo(){
   const data=buildData();
   if(!data.patente){toast('Ingresa la patente');return false;}
   const id=data.patente.replace(/[^A-Z0-9]/g,'')+'_'+Date.now();
-  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto terminado' : 'Con datos';
+  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto en curso' : 'Datos tomados';
   await setDoc(doc(db,'vehiculos',id),{...data,estado,fechaIngreso:serverTimestamp(),updatedAt:serverTimestamp()});
   currentVehId=id;
   return true;
@@ -786,9 +844,14 @@ async function guardarVehiculo(){
 async function actualizarChecklist(){
   if(!currentVehId) return false;
   const data=buildData();
-  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto terminado' : 'Con datos';
+  if(!data.patente){ toast('Ingresa la patente primero'); return false; }
+  // Estado based on which step we're completing
+  // formStep 0 or 1 (datos + accesorios) → Con datos
+  // formStep 2 (trabajos/repuestos) → Presupuesto terminado
+  const estado = (fst.trabajos?.length||fst.repuestos?.length)
+    ? 'Presupuesto terminado' : 'Con datos';
   await updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()});
-  if(data.patente) syncToSupabase(data.patente, estado);
+  syncToSupabase(data.patente, estado);
   return true;
 }
 
@@ -828,17 +891,22 @@ function goFormStep(n){
   // nav buttons
   document.getElementById('btn-prev').style.display=n===0?'none':'block';
   document.getElementById('btn-next').textContent = n===FORM_STEPS-1 ? 'Guardar ✓' : 'Siguiente →';
-
+  if(n===FORM_STEPS-1) renderFormSummary();
 }
 
 window.nextStep = async function(){
+  // Last step - save everything
   if(formStep===FORM_STEPS-1){
-    const ok = currentVehId ? await actualizarChecklist() : await guardarVehiculo();
+    const ok = await actualizarChecklist();
     if(ok){
       toast('Guardado correctamente');
       setTimeout(()=>{ volverDesdeForm(); if(currentVehId) abrirDetalle(currentVehId); },600);
     }
     return;
+  }
+  // After step 1 (accesorios + datos), auto-save as "Con datos"
+  if(formStep===1){
+    autoSaveForm();
   }
   goFormStep(formStep+1);
 }
@@ -869,23 +937,26 @@ window.generarExcel = async function(){
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        patente:v.patente||'',marca:v.marca||'',modelo:v.modelo||'',
-        anio:v.anio||null,km:v.km||null,combustible:v.combustible||null,
-        trabajos:v.trabajos||[],repuestos:v.repuestos||[],
-        observaciones:v.observaciones||''
+        patente: v.patente||'', marca: v.marca||'', modelo: v.modelo||'',
+        anio: v.anio||null, km: v.km||null, combustible: v.combustible||null,
+        trabajos: v.trabajos||[], repuestos: v.repuestos||[],
+        observaciones: v.observaciones||''
       })
     });
-    if(!res.ok) throw new Error('Error del servidor: '+res.status);
+    if(!res.ok) throw new Error('Error servidor: '+res.status);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href=url;
-    a.download=`Presupuesto_${(v.patente||'').toUpperCase()}.xlsx`;
+    a.href=url; a.download=`Presupuesto_${(v.patente||'').toUpperCase()}.xlsx`;
     document.body.appendChild(a); a.click();
     document.body.removeChild(a); URL.revokeObjectURL(url);
     toast('Excel descargado');
+    // Auto-move to "Presupuesto enviado"
     cambiarEstado('Presupuesto enviado');
-  }catch(e){ console.error(e); toast('Error: '+e.message); }
+  } catch(e){
+    console.error(e);
+    toast('Error: '+(e.message||'no se pudo conectar'));
+  }
   if(btn){ btn.textContent='Descargar Excel'; btn.disabled=false; }
 }
 
