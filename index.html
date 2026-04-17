@@ -451,6 +451,7 @@ let supavehiculos = {}; // keyed by patente
 
 function estadoDesdeObs(obs) {
   if(!obs) return 'Pendiente de datos';
+  if(obs.includes('||')) return obs.split('||')[0].trim();
   const o = obs.toLowerCase();
   if(o.includes('enviado')) return 'Presupuesto enviado';
   if(o.includes('terminado')) return 'Presupuesto terminado';
@@ -458,10 +459,15 @@ function estadoDesdeObs(obs) {
   return 'Pendiente de datos';
 }
 
+function checklistDesdeObs(obs) {
+  if(!obs || !obs.includes('||')) return {};
+  try { return JSON.parse(obs.split('||')[1]); } catch(e) { return {}; }
+}
+
 async function cargarDesdeSupabase() {
   try {
     const {data, error} = await sb.from('vehiculos')
-      .select('id,patente,taller,ingreso,salida,obs,checklist,estado_presupuesto')
+      .select('id,patente,taller,ingreso,salida,obs')
       .is('salida', null)
       .order('ingreso', {ascending: true});
     if(error) throw error;
@@ -470,7 +476,7 @@ async function cargarDesdeSupabase() {
     data.forEach(v => {
       const pat = (v.patente||'').toUpperCase().trim();
       if(!pat) return;
-      const cl = v.checklist || {};
+      const cl = checklistDesdeObs(v.obs);
       supavehiculos[pat] = {
         supaId: v.id,
         patente: pat,
@@ -638,44 +644,25 @@ window.cambiarEstado = async function(estado){
   const pat = currentPatente;
   const v = supavehiculos[pat];
   if(!v) return;
-
-  // Map estado to obs value for Supabase
-  const obsMap = {
-    'Pendiente de datos': null,
-    'Con datos': 'Con datos',
-    'Presupuesto terminado': 'Presupuesto terminado',
-    'Presupuesto enviado': 'Presupuesto Enviado'
-  };
-  const newObs = obsMap[estado];
-
-  // Update Supabase
+  // Preserve existing checklist data, just update estado prefix
+  let obsValue;
+  if(v.obs && v.obs.includes('||')){
+    obsValue = estado + '||' + v.obs.split('||')[1];
+  } else {
+    obsValue = estado;
+  }
   try {
-    await sb.from('vehiculos').update({obs: newObs}).eq('patente', pat);
-    // Update local state immediately (realtime will also update)
-    if(supavehiculos[pat]){
-      supavehiculos[pat].obs = newObs||'';
-      supavehiculos[pat].estado = estado;
-    }
-    // Also update Firebase if doc exists
-    if(v.fbId){
-      updateDoc(doc(db,'vehiculos',v.fbId),{estado,updatedAt:serverTimestamp()}).catch(()=>{});
-    }
-    // Refresh status buttons
+    const {error} = await sb.from('vehiculos').update({obs: obsValue}).eq('patente', pat);
+    if(error) throw error;
+    if(supavehiculos[pat]){ supavehiculos[pat].obs = obsValue; supavehiculos[pat].estado = estado; }
     const sr = document.getElementById('status-row');
     const statusLabels = {'Pendiente de datos':'Sin datos','Con datos':'Con datos','Presupuesto terminado':'Terminado','Presupuesto enviado':'Enviado'};
-    sr.querySelectorAll('.status-btn').forEach(b=>{
-      const e = ESTADOS[Array.from(sr.children).indexOf(b)];
-      b.classList.toggle('active', e===estado);
-    });
-    // Update excel button
+    sr.querySelectorAll('.status-btn').forEach((b,idx)=>{ b.classList.toggle('active', ESTADOS[idx]===estado); });
     const puedeExcel = ['Presupuesto terminado','Presupuesto enviado'].includes(estado);
     document.getElementById('btn-excel').style.display = puedeExcel ? 'block' : 'none';
     renderPanel();
     toast('Estado: '+estado);
-  } catch(e) {
-    console.error(e);
-    toast('Error al cambiar estado');
-  }
+  } catch(e){ console.error(e); toast('Error: '+e.message); }
 }
 
 window.volverPanel = function(){ 
@@ -905,13 +892,15 @@ function autoSaveForm(){
     trabajos: fst.trabajos||[], repuestos: fst.repuestos||[],
     observaciones: data.observaciones||''
   };
-  // Debounce: save after 1s of inactivity
+  const currentEstado = supavehiculos[pat]?.estado || 'Pendiente de datos';
+  const obsValue = currentEstado + '||' + JSON.stringify(checklist);
   clearTimeout(autoSaveForm._timer);
   autoSaveForm._timer = setTimeout(async ()=>{
     try {
-      await sb.from('vehiculos').update({checklist}).eq('patente', pat);
+      const {error} = await sb.from('vehiculos').update({obs: obsValue}).eq('patente', pat);
+      if(error) throw error;
       if(supavehiculos[pat]) Object.assign(supavehiculos[pat], checklist);
-    } catch(e){ console.warn('autoSave error:', e); }
+    } catch(e){ console.warn('autoSave error:', e.message); }
   }, 1000);
 }
 
@@ -924,9 +913,7 @@ async function actualizarChecklist(){
 
   const estado = (fst.trabajos?.length||fst.repuestos?.length)
     ? 'Presupuesto terminado' : 'Con datos';
-  const obsVal = estado === 'Presupuesto terminado' ? 'Presupuesto terminado' : 'Con datos';
 
-  // Build checklist JSON — everything from the form
   const checklist = {
     marca: data.marca||'', modelo: data.modelo||'',
     anio: data.anio||null, km: data.km||null,
@@ -937,22 +924,22 @@ async function actualizarChecklist(){
     observaciones: data.observaciones||''
   };
 
+  const obsValue = estado + '||' + JSON.stringify(checklist);
+
   try {
     const {error} = await sb.from('vehiculos')
-      .update({ obs: obsVal, checklist })
+      .update({ obs: obsValue })
       .eq('patente', pat);
     if(error) throw error;
-
-    // Update local state immediately
     if(supavehiculos[pat]){
       supavehiculos[pat].estado = estado;
-      supavehiculos[pat].obs = obsVal;
+      supavehiculos[pat].obs = obsValue;
       Object.assign(supavehiculos[pat], checklist);
     }
     return true;
   } catch(e) {
-    console.error('Error guardando checklist:', e);
-    toast('Error al guardar: '+e.message);
+    console.error('Error guardando:', e);
+    toast('Error al guardar: ' + e.message);
     return false;
   }
 }
