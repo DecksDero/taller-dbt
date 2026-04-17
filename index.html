@@ -461,7 +461,7 @@ function estadoDesdeObs(obs) {
 async function cargarDesdeSupabase() {
   try {
     const {data, error} = await sb.from('vehiculos')
-      .select('id,patente,taller,ingreso,salida,obs')
+      .select('id,patente,taller,ingreso,salida,obs,checklist,estado_presupuesto')
       .is('salida', null)
       .order('ingreso', {ascending: true});
     if(error) throw error;
@@ -470,20 +470,37 @@ async function cargarDesdeSupabase() {
     data.forEach(v => {
       const pat = (v.patente||'').toUpperCase().trim();
       if(!pat) return;
+      const cl = v.checklist || {};
       supavehiculos[pat] = {
-        id: v.id,
+        supaId: v.id,
         patente: pat,
         taller: v.taller||'',
         ingreso: v.ingreso||'',
         obs: v.obs||'',
-        estado: estadoDesdeObs(v.obs)
+        estado: estadoDesdeObs(v.obs),
+        // Checklist data from JSONB column
+        marca: cl.marca||'',
+        modelo: cl.modelo||'',
+        anio: cl.anio||null,
+        km: cl.km||null,
+        combustible: cl.combustible||0,
+        parabrisas: cl.parabrisas||'',
+        tapiz: cl.tapiz||'',
+        accesorios: cl.accesorios||{},
+        accesoriosQty: cl.accesoriosQty||{},
+        trabajos: cl.trabajos||[],
+        repuestos: cl.repuestos||[],
+        observaciones: cl.observaciones||''
       };
     });
     renderPanel();
     const total = Object.keys(supavehiculos).length;
     const pendientes = Object.values(supavehiculos).filter(v=>v.estado==='Pendiente de datos').length;
     document.getElementById('nav-sub').textContent = `${total} vehículos · ${pendientes} sin datos`;
-  } catch(e) { console.error('Error cargando Supabase:', e); }
+  } catch(e) { 
+    console.error('Error cargando Supabase:', e);
+    document.getElementById('nav-sub').textContent = 'Error al cargar datos';
+  }
 }
 
 // Supabase realtime — instant updates when control app changes something
@@ -492,27 +509,6 @@ sb.channel('presup-vehiculos')
     () => cargarDesdeSupabase())
   .subscribe();
 
-// Firebase — only for checklist data
-onSnapshot(col, snap => {
-  vehiculos = {};
-  snap.forEach(d => vehiculos[d.id] = {...d.data(), id:d.id});
-  // Merge checklist data into supavehiculos
-  Object.values(vehiculos).forEach(fbv => {
-    const pat = (fbv.patente||'').toUpperCase().trim();
-    if(pat && supavehiculos[pat]) {
-      Object.assign(supavehiculos[pat], {
-        marca: fbv.marca, modelo: fbv.modelo, anio: fbv.anio,
-        km: fbv.km, combustible: fbv.combustible,
-        parabrisas: fbv.parabrisas, tapiz: fbv.tapiz,
-        accesorios: fbv.accesorios, accesoriosQty: fbv.accesoriosQty,
-        trabajos: fbv.trabajos, repuestos: fbv.repuestos,
-        observaciones: fbv.observaciones,
-        fbId: fbv.id  // keep Firebase doc ID for updates
-      });
-    }
-  });
-  renderPanel();
-});
 
 // Initial load
 cargarDesdeSupabase();
@@ -897,64 +893,68 @@ function buildData(){
 }
 
 function autoSaveForm(){
-  if(!currentVehId) return;
-  const data=buildData();
-  const estado = data.patente
-    ? (fst.trabajos?.length||fst.repuestos?.length ? 'Presupuesto terminado' : 'Con datos')
-    : 'Pendiente de datos';
-  updateDoc(doc(db,'vehiculos',currentVehId),{...data,estado,updatedAt:serverTimestamp()}).catch(()=>{});
+  const pat = currentPatente || document.getElementById('f-patente')?.value?.toUpperCase().trim();
+  if(!pat) return;
+  const data = buildData();
+  const checklist = {
+    marca: data.marca||'', modelo: data.modelo||'',
+    anio: data.anio||null, km: data.km||null,
+    combustible: fst.combustible||0,
+    parabrisas: fst.parabrisas||'', tapiz: fst.tapiz||'',
+    accesorios: fst.accesorios||{}, accesoriosQty: fst.accesoriosQty||{},
+    trabajos: fst.trabajos||[], repuestos: fst.repuestos||[],
+    observaciones: data.observaciones||''
+  };
+  // Debounce: save after 1s of inactivity
+  clearTimeout(autoSaveForm._timer);
+  autoSaveForm._timer = setTimeout(async ()=>{
+    try {
+      await sb.from('vehiculos').update({checklist}).eq('patente', pat);
+      if(supavehiculos[pat]) Object.assign(supavehiculos[pat], checklist);
+    } catch(e){ console.warn('autoSave error:', e); }
+  }, 1000);
 }
 
-async function guardarVehiculo(){
-  const data=buildData();
-  if(!data.patente){toast('Ingresa la patente');return false;}
-  const id=data.patente.replace(/[^A-Z0-9]/g,'')+'_'+Date.now();
-  const estado = fst.trabajos.length||fst.repuestos.length ? 'Presupuesto en curso' : 'Datos tomados';
-  await setDoc(doc(db,'vehiculos',id),{...data,estado,fechaIngreso:serverTimestamp(),updatedAt:serverTimestamp()});
-  currentVehId=id;
-  return true;
-}
 
 async function actualizarChecklist(){
   const pat = currentPatente;
-  if(!pat){ toast('Error: no hay patente seleccionada'); return false; }
-
+  if(!pat){ toast('Error: no hay patente'); return false; }
   const data = buildData();
   if(!data.patente){ toast('Ingresa la patente primero'); return false; }
 
-  // Determine estado based on step
   const estado = (fst.trabajos?.length||fst.repuestos?.length)
     ? 'Presupuesto terminado' : 'Con datos';
+  const obsVal = estado === 'Presupuesto terminado' ? 'Presupuesto terminado' : 'Con datos';
 
-  // Save checklist to Firebase (using patente as document ID for persistence)
-  const fbDocId = pat.replace(/[^A-Z0-9]/g,'');
-  try {
-    await setDoc(doc(db,'vehiculos',fbDocId), {
-      ...data,
-      estado,
-      patente: pat,
-      updatedAt: serverTimestamp()
-    });
-    // Update Firebase ID in local state
-    if(supavehiculos[pat]) supavehiculos[pat].fbId = fbDocId;
-  } catch(e) { console.warn('Firebase save error:', e); }
-
-  // Update Supabase estado (source of truth)
-  const obsMap = {
-    'Con datos': 'Con datos',
-    'Presupuesto terminado': 'Presupuesto terminado'
+  // Build checklist JSON — everything from the form
+  const checklist = {
+    marca: data.marca||'', modelo: data.modelo||'',
+    anio: data.anio||null, km: data.km||null,
+    combustible: fst.combustible||0,
+    parabrisas: fst.parabrisas||'', tapiz: fst.tapiz||'',
+    accesorios: fst.accesorios||{}, accesoriosQty: fst.accesoriosQty||{},
+    trabajos: fst.trabajos||[], repuestos: fst.repuestos||[],
+    observaciones: data.observaciones||''
   };
+
   try {
-    await sb.from('vehiculos').update({obs: obsMap[estado]}).eq('patente', pat);
+    const {error} = await sb.from('vehiculos')
+      .update({ obs: obsVal, checklist })
+      .eq('patente', pat);
+    if(error) throw error;
+
+    // Update local state immediately
     if(supavehiculos[pat]){
       supavehiculos[pat].estado = estado;
-      supavehiculos[pat].obs = obsMap[estado]||'';
-      // Update merged checklist data
-      Object.assign(supavehiculos[pat], data);
+      supavehiculos[pat].obs = obsVal;
+      Object.assign(supavehiculos[pat], checklist);
     }
-  } catch(e) { console.error('Supabase update error:', e); return false; }
-
-  return true;
+    return true;
+  } catch(e) {
+    console.error('Error guardando checklist:', e);
+    toast('Error al guardar: '+e.message);
+    return false;
+  }
 }
 
 function renderFormSummary(){
@@ -1002,7 +1002,7 @@ window.nextStep = async function(){
     const ok = await actualizarChecklist();
     if(ok){
       toast('Guardado correctamente');
-      setTimeout(()=>{ volverDesdeForm(); if(currentVehId) abrirDetalle(currentVehId); },600);
+      setTimeout(()=>{ volverDesdeForm(); if(currentPatente) abrirDetalle(currentPatente); },600);
     }
     return;
   }
